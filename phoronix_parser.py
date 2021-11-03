@@ -60,10 +60,18 @@ def generate_dict():
     for bench in sorted(os.listdir(bench_root_path)):
         bench_name, bench_v = bench.rsplit('-', 1)
 
-        if bench_name in bench_dict:
-            bench_dict[bench_name].append(bench_v)
-        else:
-            bench_dict[bench_name] = [bench_v]
+        if bench_name not in bench_dict:
+            bench_dict[bench_name] = {}
+
+        for p, installer_name in installer_map.items():
+            if os.path.isfile(os.path.join(bench_root_path, bench, installer_name)):
+                if 'versions' not in bench_dict[bench_name]:
+                    bench_dict[bench_name]['versions'] = {}
+
+                if bench_v in bench_dict[bench_name]['versions']:
+                    bench_dict[bench_name]['versions'][bench_v].append(p)
+                else:
+                    bench_dict[bench_name]['versions'][bench_v] = [p]
 
 
 def phoronix_init():
@@ -102,22 +110,26 @@ def phoronix_init():
     repo.remotes.origin.pull("master", rebase=rebase)
 
 
-def phoronix_list(benchmark_name=None):
+def phoronix_list(benchmark_name=None, plat=platform):
     """
     Function capable of listing all the versions of a given benchmark.
     """
     if benchmark_name is None or not benchmark_name:
         if not bench_dict:
             generate_dict()
-        for bench_name, bench_v in bench_dict.items():
-            print("{} @ {}".format(bench_name, ', '.join(bench_v)))
+        for bench_name, bench_data in bench_dict.items():
+            for v, p in bench_data['versions'].items():
+                if platform in p:
+                    print(f"{bench_name} @ {v} [{platform}]")
     else:
         local_benchmark_repo = os.path.join(clone_dir, REMOTE_BENCH_ROOT_PATH, benchmark_name)
         results = glob.glob(os.path.join(bench_root_path, local_benchmark_repo + "*"))
         if results:
             if not bench_dict:
                 generate_dict()
-            print("{} @ {}".format(benchmark_name, ', '.join(bench_dict[benchmark_name])))
+            for v, p in bench_dict[benchmark_name]['versions'].items():
+                if platform in p:
+                    print(f"{benchmark_name} @ {v} [{platform}]")
         else:
             raise Exception("Benchmark {} not found.".format(benchmark_name))
     pass
@@ -132,7 +144,7 @@ def phoronix_exists(benchmark_name, benchmark_v=None):
             generate_dict()
         if benchmark_name in bench_dict:
             if benchmark_v:
-                return benchmark_v in bench_dict[benchmark_name]
+                return benchmark_v in bench_dict[benchmark_name]['versions']
             else:
                 return True
         else:
@@ -398,7 +410,7 @@ def install_executable(target_dir):
 def phoronix_install(benchmark_name, benchmark_v=None): # noqa: C901
     if phoronix_exists(benchmark_name, benchmark_v):
         if not benchmark_v:
-            benchmark_v = bench_dict[benchmark_name][-1]
+            benchmark_v = list(bench_dict[benchmark_name]['versions'].keys())[-1]
 
         bench_path = os.path.join(bench_root_path, "{}-{}".format(benchmark_name, benchmark_v))
 
@@ -432,4 +444,7 @@ def phoronix_install(benchmark_name, benchmark_v=None): # noqa: C901
 if __name__ == "__main__":
     phoronix_init()
     # phoronix_install("astcenc", "1.1.0")
-    phoronix_install("cinebench")
+    # phoronix_install("cinebench")
+    # phoronix_list("cinebench")
+    phoronix_list("astcenc")
+    # phoronix_list()
