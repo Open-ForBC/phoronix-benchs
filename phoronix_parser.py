@@ -4,9 +4,9 @@ import git
 import os
 import glob
 from xml.dom import minidom
-import urllib.request
+import requests
 import hashlib
-from shutil import copy2 as cp
+from shutil import copy2 as cp, copyfileobj, COPY_BUFSIZE
 import stat
 from sys import platform
 import subprocess
@@ -14,8 +14,8 @@ from select import select
 from contextlib import contextmanager
 import json
 import fileinput
-import progressbar
 import traceback
+import progressbar
 
 REMOTE_BENCH_ROOT_PATH = os.path.join("ob-cache", "test-profiles", "pts")
 file_dir = os.path.dirname(os.path.abspath(__file__))
@@ -32,28 +32,38 @@ installer_map = {"linux": "install.sh",
 bench_dict = {}
 
 
-class ProgressBar():
-    def __init__(self):
-        self.pbar = None
-
-    def __call__(self, block_num, block_size, total_size):
-        if not self.pbar:
-            self.pbar = progressbar.ProgressBar(maxval=total_size if total_size > 0 else 0)
-            self.pbar.start()
-
-        downloaded = block_num * block_size
-        if downloaded < total_size:
-            self.pbar.update(downloaded)
-        else:
-            self.pbar.finish()
-
-
 @contextmanager
 def pipe():
     r, w = os.pipe()
     yield r, w
     os.close(r)
     os.close(w)
+
+
+class ProgressBar():
+    def __init__(self, total_size):
+        self.pbar = None
+        self.total_size = total_size if total_size > 0 else progressbar.UnknownLength
+        self.widgets = [progressbar.Percentage() if total_size else ' ',
+                        progressbar.Bar(), ' ',
+                        progressbar.FileTransferSpeed(), ' ',
+                        ' (', progressbar.ETA(), ') ']
+
+    def call(self, block_num, block_size):
+        if not self.pbar:
+            self.pbar = progressbar.ProgressBar(maxval=self.total_size,
+                                                widgets=self.widgets)
+            self.pbar.start()
+
+        downloaded = block_num * block_size
+
+        if self.total_size == progressbar.UnknownLength:
+            self.pbar.update(downloaded)
+        else:
+            if downloaded < self.total_size:
+                self.pbar.update(downloaded)
+            else:
+                self.pbar.finish()
 
 
 def generate_dict():
@@ -110,17 +120,19 @@ def phoronix_init():
     repo.remotes.origin.pull("master", rebase=rebase)
 
 
-def phoronix_list(benchmark_name=None, plat=platform):
+def phoronix_list(benchmark_name=None, plat=None):
     """
     Function capable of listing all the versions of a given benchmark.
     """
+    if plat is None:
+        plat = platform
     if benchmark_name is None or not benchmark_name:
         if not bench_dict:
             generate_dict()
         for bench_name, bench_data in bench_dict.items():
             for v, p in bench_data['versions'].items():
-                if platform in p:
-                    print(f"{bench_name} @ {v} [{platform}]")
+                if plat in p:
+                    print(f"{bench_name} @ {v} [{plat}]")
     else:
         local_benchmark_repo = os.path.join(clone_dir, REMOTE_BENCH_ROOT_PATH, benchmark_name)
         results = glob.glob(os.path.join(bench_root_path, local_benchmark_repo + "*"))
@@ -128,8 +140,8 @@ def phoronix_list(benchmark_name=None, plat=platform):
             if not bench_dict:
                 generate_dict()
             for v, p in bench_dict[benchmark_name]['versions'].items():
-                if platform in p:
-                    print(f"{benchmark_name} @ {v} [{platform}]")
+                if plat in p:
+                    print(f"{benchmark_name} @ {v} [{plat}]")
         else:
             raise Exception("Benchmark {} not found.".format(benchmark_name))
     pass
@@ -159,6 +171,35 @@ def safe_mkdir(path):
     """
     if not os.path.isdir(path):
         os.mkdir(path)
+
+
+def mycopyfileobj(fsrc, fdst, length=0, total_size=0, prog_bar: ProgressBar = None):
+    """copy data from file-like object fsrc to file-like object fdst"""
+    # Localize variable access to minimize overhead.
+    if not prog_bar:
+        prog_bar = ProgressBar(total_size)
+    if not length:
+        length = COPY_BUFSIZE
+    fsrc_read = fsrc.read
+    fdst_write = fdst.write
+    block_num = 0
+    while True:
+        block_num += 1
+        buf = fsrc_read(length)
+        if not buf:
+            break
+        fdst_write(buf)
+        prog_bar.call(block_num=block_num, block_size=length)
+
+
+def download_file(url, target_filename):
+    with requests.get(url, stream=True) as r:
+        try:
+            total_size = int(r.headers.get('Content-Length'))
+        except Exception:
+            total_size = 0
+        with open(target_filename, 'wb') as f:
+            mycopyfileobj(r.raw, f, total_size=total_size)
 
 
 def file_inplace_replace(file_path, search_string, replace_string):
@@ -360,9 +401,12 @@ def download_packages(bench_path, target_dir):
             for url in urls:
                 print(url)
                 try:
-                    opener = urllib.request.URLopener()
-                    opener.addheader('User-Agent', 'Mozilla/5.0')
-                    filename, _ = opener.retrieve(url, target_file, ProgressBar())
+                    download_file(url=url, target_filename=target_file)
+                    # opener = urllib.request.URLopener()
+                    # opener.addheader('User-Agent', 'Mozilla/5.0')
+                    # opener.addheader('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8')
+                    # print(opener.retrieve(url))
+                    # filename, _ = opener.retrieve(url, target_file, ProgressBar())
                     verified = False
                     if md5:
                         if hashlib.md5(open(target_file, 'rb').read()).hexdigest() == md5:
@@ -407,10 +451,13 @@ def install_executable(target_dir):
         raise Exception(f"The current platform ({platform}) is not supported by this benchmark.")
 
 
-def phoronix_install(benchmark_name, benchmark_v=None): # noqa: C901
+def phoronix_install(benchmark_name, benchmark_v=None):
     if phoronix_exists(benchmark_name, benchmark_v):
         if not benchmark_v:
             benchmark_v = list(bench_dict[benchmark_name]['versions'].keys())[-1]
+            print(f"Benchmark version not specified, defaulting to latest ({benchmark_v})")
+        else:
+            print(f"Selected benchmark version: {benchmark_v}")
 
         bench_path = os.path.join(bench_root_path, "{}-{}".format(benchmark_name, benchmark_v))
 
