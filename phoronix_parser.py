@@ -346,89 +346,91 @@ def download_packages(bench_path, target_dir):
 
     """
     downloads_xml_path = os.path.join(bench_path, "downloads.xml")
-    downloads_xml = minidom.parse(downloads_xml_path)
-    packages_list = downloads_xml.getElementsByTagName('Package')
+    if os.path.exists(downloads_xml_path):
+        downloads_xml = minidom.parse(downloads_xml_path)
+        packages_list = downloads_xml.getElementsByTagName('Package')
 
-    for package in packages_list:
-        urls = package.getElementsByTagName('URL')[0].firstChild.nodeValue.split(',')
-        filename = package.getElementsByTagName('FileName')[0].firstChild.nodeValue
-
-        try:
-            md5 = package.getElementsByTagName('MD5')[0].firstChild.nodeValue
-            print("Downloading {} (md5:{})".format(filename, md5))
-        except Exception:
-            md5 = None
+        for package in packages_list:
+            urls = package.getElementsByTagName('URL')[0].firstChild.nodeValue.split(',')
+            filename = package.getElementsByTagName('FileName')[0].firstChild.nodeValue
 
             try:
-                sha256 = package.getElementsByTagName('SHA256')[0].firstChild.nodeValue
-                print("Downloading {} (sha256:{})".format(filename, sha256))
+                md5 = package.getElementsByTagName('MD5')[0].firstChild.nodeValue
+                print("Downloading {} (md5:{})".format(filename, md5))
             except Exception:
-                sha256 = None
+                md5 = None
 
                 try:
-                    size = package.getElementsByTagName('FileSize')[0].firstChild.nodeValue
-                    print("Downloading {} (size:{})".format(filename, size))
+                    sha256 = package.getElementsByTagName('SHA256')[0].firstChild.nodeValue
+                    print("Downloading {} (sha256:{})".format(filename, sha256))
                 except Exception:
-                    size = None
+                    sha256 = None
 
-        target_file = os.path.join(target_dir, filename)
-        platform_specific = get_related_platform(xml_package=package)
-        if not platform_specific:
-            should_download = True
-        else:
-            should_download = platform_specific == platform
-            if not should_download:
-                print(f'Skipping file {filename} since not required for this platform.')
+                    try:
+                        size = package.getElementsByTagName('FileSize')[0].firstChild.nodeValue
+                        print("Downloading {} (size:{})".format(filename, size))
+                    except Exception:
+                        size = None
 
-        if os.path.isfile(target_file):
-            with open(target_file, 'rb') as f:
-                if md5:
-                    if hashlib.md5(f.read()).hexdigest() == md5:
-                        print("Already downloaded. Skipping.")
-                        should_download = False
-                elif sha256:
-                    if hashlib.sha256(f.read()).hexdigest() == sha256:
-                        print("Already downloaded. Skipping.")
-                        should_download = False
-                elif size:
-                    if os.path.getsize(target_file) == size:
-                        print("Already downloaded. Skipping.")
-                        should_download = False
-                else:
-                    os.remove(target_file)
+            target_file = os.path.join(target_dir, filename)
+            platform_specific = get_related_platform(xml_package=package)
+            if not platform_specific:
+                should_download = True
+            else:
+                should_download = platform_specific == platform
+                if not should_download:
+                    print(f'Skipping file {filename} since not required for this platform.')
 
-        if should_download:
-            for url in urls:
-                print(url)
-                try:
-                    download_file(url=url, target_filename=target_file)
-                    # opener = urllib.request.URLopener()
-                    # opener.addheader('User-Agent', 'Mozilla/5.0')
-                    # opener.addheader('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8')
-                    # print(opener.retrieve(url))
-                    # filename, _ = opener.retrieve(url, target_file, ProgressBar())
-                    verified = False
+            if os.path.isfile(target_file):
+                with open(target_file, 'rb') as f:
                     if md5:
-                        if hashlib.md5(open(target_file, 'rb').read()).hexdigest() == md5:
-                            verified = True
+                        if hashlib.md5(f.read()).hexdigest() == md5:
+                            print("Already downloaded. Skipping.")
+                            should_download = False
                     elif sha256:
-                        if hashlib.sha256(open(target_file, 'rb').read()).hexdigest() == sha256:
-                            verified = True
+                        if hashlib.sha256(f.read()).hexdigest() == sha256:
+                            print("Already downloaded. Skipping.")
+                            should_download = False
                     elif size:
                         if os.path.getsize(target_file) == size:
-                            verified = True
+                            print("Already downloaded. Skipping.")
+                            should_download = False
                     else:
-                        verified = False
-
-                    if verified:
-                        break
-                    else:
-                        print("Wrong checksum. Trying from another source.")
                         os.remove(target_file)
-                except Exception:
-                    traceback.print_exc()
-                    if url == urls[-1]:
-                        raise Exception("None of the provided URLs works.")
+
+            if should_download:
+                for url in urls:
+                    print(url)
+                    try:
+                        download_file(url=url, target_filename=target_file)
+                        # opener = urllib.request.URLopener()
+                        # opener.addheader('User-Agent', 'Mozilla/5.0')
+                        # opener.addheader('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8')
+                        # print(opener.retrieve(url))
+                        # filename, _ = opener.retrieve(url, target_file, ProgressBar())
+                        verified = False
+                        if md5:
+                            if hashlib.md5(open(target_file, 'rb').read()).hexdigest() == md5:
+                                verified = True
+                        elif sha256:
+                            if hashlib.sha256(open(target_file, 'rb').read()).hexdigest() == sha256:
+                                verified = True
+                        elif size:
+                            if os.path.getsize(target_file) == size:
+                                verified = True
+                        else:
+                            verified = False
+
+                        if verified:
+                            break
+                        else:
+                            print("Wrong checksum. Trying from another source.")
+                            os.remove(target_file)
+                    except Exception:
+                        traceback.print_exc()
+                        if url == urls[-1]:
+                            raise Exception("None of the provided URLs works.")
+    return
 
 
 def install_executable(target_dir):
