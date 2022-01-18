@@ -6,7 +6,7 @@ import glob
 from xml.dom import minidom
 import requests
 import hashlib
-from shutil import copy2 as cp, copyfileobj, COPY_BUFSIZE
+from shutil import copy2 as cp, COPY_BUFSIZE
 import stat
 from sys import platform
 import subprocess
