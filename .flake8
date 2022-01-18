@@ -8,4 +8,6 @@ ignore =
     W504,
     #Banner for CLI
     W605,
+    # Too complex methods
+    C901
 max-line-length = 120
