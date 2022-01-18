@@ -1,6 +1,6 @@
 name: Continuous integration testing
 
-on: [pull_request]
+on: [push, pull_request]
 
 jobs:
   build:
