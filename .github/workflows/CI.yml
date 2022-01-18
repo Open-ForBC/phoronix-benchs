@@ -12,9 +12,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
-      - name: Install dependencies
-        run: |
-          python -m p
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v2
         with:
