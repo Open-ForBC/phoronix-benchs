@@ -1,0 +1,2 @@
+#!/bin/sh
+sed -i '2 i LOG_FILE=/dev/stdout' BENCHMARK_NAME

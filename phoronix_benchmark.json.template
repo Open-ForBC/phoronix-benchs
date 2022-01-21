@@ -1,0 +1,12 @@
+{
+    "name": "PUT_NAME_HERE",
+    "description": "PUT_DESCRIPTION_HERE",
+    "default_preset": "PUT_DEFAULT_PRESETS_HERE",
+    "setup_command": "./setup.sh",
+    "run_command": "PUT_RUN_COMMAND_HERE",
+    "test_command": ["pip install flake8", "flake8 --exclude .venv"],
+    "stats": 
+        PUT_STATS_HERE,
+    "virtualenv": true   
+}
+
