@@ -22,8 +22,8 @@ file_dir = os.path.dirname(os.path.abspath(__file__))
 clone_dir = os.path.join(file_dir, "phoronix-benchs")
 bench_root_path = os.path.join(clone_dir, REMOTE_BENCH_ROOT_PATH)
 install_dir = os.path.join(file_dir, "phoronix-converted")
-implementation_template = os.path.join(file_dir, "phoronix_implementation.py.template")
-benchmark_info_template = os.path.join(file_dir, "phoronix_benchmark_info.json.template")
+benchmark_info_template = os.path.join(file_dir, "phoronix_benchmark.json.template")
+setup_template = os.path.join(file_dir, "phoronix_setup.sh.template")
 
 installer_map = {"linux": "install.sh",
                  "linux2": "install.sh",
@@ -238,16 +238,29 @@ def convert_settings(settings_list, settings_dir):
     save_default_settings = True
 
     safe_mkdir(settings_dir)
+    if len(settings_list) == 0:
+        name = 'unique_preset'
+        args = 'no_setting_specified'
+        dict = {"args": args}
 
-    for setting in settings_list:
-        name = setting.getElementsByTagName('Name')[0].firstChild.nodeValue.lower()
-        cli_args = setting.getElementsByTagName('Value')[0].firstChild.nodeValue
-        dict = {"cli_args": cli_args}
-        with open(os.path.join(settings_dir, f"settings-{name}.json"), 'w+') as outfile:
+        with open(os.path.join(settings_dir, f"preset-{name}.json"), 'w+') as outfile:
             json.dump(dict, outfile)
             if save_default_settings:
-                default_settings_file = f"settings-{name}.json"
+                default_settings_file = f"preset-{name}.json"
                 save_default_settings = False
+    else:
+        for setting in settings_list:
+            if len(setting.getElementsByTagName('Name')) != 0:
+                name = setting.getElementsByTagName('Name')[0].firstChild.nodeValue.lower()
+            if len(setting.getElementsByTagName('Value')) != 0:
+                args = setting.getElementsByTagName('Value')[0].firstChild.nodeValue
+
+            dict = {"args": args}
+            with open(os.path.join(settings_dir, f"preset-{name}.json"), 'w+') as outfile:
+                json.dump(dict, outfile)
+                if save_default_settings:
+                    default_settings_file = f"preset-{name}.json"
+                    save_default_settings = False
 
     return default_settings_file
 
@@ -263,36 +276,29 @@ def install_installers(bench_path, target_dir):
         os.chmod(installer_path, os.stat(installer_path).st_mode | stat.S_IEXEC)
 
 
-def create_implementation_file(target_dir, benchmark_name, benchmark_path):
+def create_setup_file(target_dir, benchmark_name):
     """
-    A function which creates an OpenForBC implementation file from a template.
-    The command is set by parsing the installer description.
-    The arguments are by default the "cli_args" from the converted settings.
+    A function which creates a setup file from a template.
     """
-    target_implementation_file = os.path.join(target_dir, "implementation.py")
-    cp(implementation_template, target_implementation_file)
-    benchmark_command = benchmark_name
-    with open(os.path.join(benchmark_path, installer_map[platform])) as f:
-        for line in f.readlines():
-            if "chmod +x" in line:
-                benchmark_command = line.replace("chmod +x", '').rstrip().lstrip()
-                print("Executable found in {} as {}".format(installer_map[platform], benchmark_command))
-
-    file_inplace_replace(file_path=target_implementation_file,
-                         search_string="PUT_COMMAND_HERE",
-                         replace_string=f"./{benchmark_command}")
+    target_setup_file = os.path.join(target_dir, "setup.sh")
+    cp(setup_template, target_setup_file)
+    file_inplace_replace(file_path=target_setup_file, search_string="BENCHMARK_NAME", replace_string=benchmark_name)
 
 
-def create_info_file(target_dir, test_definition_xml, default_settings_file):
+def create_info_file(target_dir, test_definition_xml, results_definition_xml, default_settings_file, benchmark_name):
     """
-    A function which creates an OpenForBC information file by getting the info from the test-definition.xml file.
+    A function which creates an OpenForBC benchmark by getting the info from the test-definition.xml file and
+    by defining the run command, i.e. the script to be executed in order to run the benchmark.
     Title and Description are the sensitive tokens.
+    Furthermore, this function takes informations from results-definition.xml about benchamrk results
+    parsing in order to put them inside the benchmark.json file.
     """
     info_section = test_definition_xml.getElementsByTagName('TestInformation')[0]
     info_benchmark_name = info_section.getElementsByTagName('Title')[0].firstChild.nodeValue
     info_benchmark_description = info_section.getElementsByTagName('Description')[0].firstChild.nodeValue
+    benchmark_run_command = "./" + benchmark_name
 
-    target_benchmark_info_file = os.path.join(target_dir, "benchmark_info.json")
+    target_benchmark_info_file = os.path.join(target_dir, "benchmark.json")
     cp(benchmark_info_template, target_benchmark_info_file)
 
     file_inplace_replace(file_path=target_benchmark_info_file,
@@ -302,8 +308,48 @@ def create_info_file(target_dir, test_definition_xml, default_settings_file):
                          search_string="PUT_DESCRIPTION_HERE",
                          replace_string=info_benchmark_description)
     file_inplace_replace(file_path=target_benchmark_info_file,
-                         search_string="PUT_DEFAULT_SETTINGS_HERE",
+                         search_string="PUT_DEFAULT_PRESETS_HERE",
                          replace_string=default_settings_file)
+    file_inplace_replace(file_path=target_benchmark_info_file,
+                         search_string="PUT_RUN_COMMAND_HERE",
+                         replace_string=benchmark_run_command)
+
+    # RESULTS PARSING
+    # Results can be represented with two different tag inside the results-definition.xml,
+    # <ResultParser> or <SystemMonitor>.
+
+    regex = "(.*)"
+
+    if len(results_definition_xml.getElementsByTagName('ResultsParser')) != 0:
+        results_parser = results_definition_xml.getElementsByTagName('ResultsParser')
+        results_dict = {} # dict when I put all the statistics to parse
+        for node in results_parser:
+            stat = node.getElementsByTagName('OutputTemplate')[0].firstChild.nodeValue
+            if len(node.getElementsByTagName('ArgumentsDescription')) != 0:
+                stat_name = node.getElementsByTagName('ArgumentsDescription')[0].firstChild.nodeValue
+            else:
+                stat_name = "results"
+
+            stat = stat.replace("#_RESULT_#", regex)
+            mini_dict = {}
+            mini_dict['regex'] = stat
+            results_dict[stat_name] = mini_dict
+            results_string = json.dumps(results_dict)
+    else:
+        results_parser = results_definition_xml.getElementsByTagName('SystemMonitor')
+        results_dict = {} # dict when I put all the statistics to parse
+        for node in results_parser:
+            stat = node.getElementsByTagName('Sensor')[0].firstChild.nodeValue
+            stat_name = "results"
+
+            stat = stat.replace("#_RESULT_#", regex)
+            mini_dict = {}
+            mini_dict['regex'] = stat
+            results_dict[stat_name] = mini_dict
+            results_string = json.dumps(results_dict)
+
+    file_inplace_replace(file_path=target_benchmark_info_file, search_string="PUT_STATS_HERE",
+                         replace_string=results_string)
 
 
 def get_related_platform(xml_package):
@@ -460,10 +506,10 @@ def phoronix_install(benchmark_name, benchmark_v=None):
             print(f"Benchmark version not specified, defaulting to latest ({benchmark_v})")
         else:
             print(f"Selected benchmark version: {benchmark_v}")
-
         bench_path = os.path.join(bench_root_path, "{}-{}".format(benchmark_name, benchmark_v))
 
         test_definition_xml = minidom.parse(os.path.join(bench_path, "test-definition.xml"))
+        results_definition_xml = minidom.parse(os.path.join(bench_path, "results-definition.xml"))
         settings_list = test_definition_xml.getElementsByTagName('Entry')
 
         safe_mkdir(install_dir)
@@ -472,19 +518,20 @@ def phoronix_install(benchmark_name, benchmark_v=None):
 
         safe_mkdir(target_dir)
 
-        settings_dir = os.path.join(target_dir, "settings")
+        settings_dir = os.path.join(target_dir, "presets")
         default_settings_file = convert_settings(settings_list=settings_list, settings_dir=settings_dir)
 
         install_installers(bench_path=bench_path, target_dir=target_dir)
 
-        create_implementation_file(target_dir=target_dir, benchmark_name=benchmark_name, benchmark_path=bench_path)
+        create_setup_file(target_dir=target_dir, benchmark_name=benchmark_name)
 
         create_info_file(target_dir=target_dir,
                          test_definition_xml=test_definition_xml,
-                         default_settings_file=default_settings_file)
+                         results_definition_xml=results_definition_xml,
+                         default_settings_file=default_settings_file,
+                         benchmark_name=benchmark_name)
 
         download_packages(bench_path=bench_path, target_dir=target_dir)
-
         install_executable(target_dir=target_dir)
     else:
         raise Exception(f"The required benchmark {benchmark_name} @ {benchmark_v} doesn't exist.")

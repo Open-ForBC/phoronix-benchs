@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-
 import argparse
 import sys
 from phoronix_parser import installer_map, phoronix_init, phoronix_list, phoronix_install
 
 
 if __name__ == "__main__":
+
     parser = argparse.ArgumentParser(description='Convert phoronix benchmarks into OpenForBC ones with ease.')
     parser.add_argument('mode', choices=['list', 'install'], help="Select working mode")
     try:
