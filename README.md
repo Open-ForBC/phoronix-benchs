@@ -136,3 +136,60 @@ foo@bar:~$ ./astcenc -fast
 ```
 
 And check for any output in the `LOG_FILE`-pointed target.
+
+## Available Linux Benchmark
+Below here a list of phoronix benchmark executable on Linux and compatible with OpenForBC-Benchmark tool.
+
+### ASM-FISH
+#### DESCRIPTION: 
+This is a test of asmFish, an advanced chess benchmark written in Assembly.
+#### RESULTS FORMAT:
+Nodes/Second
+
+### ASTC Encoder
+#### DESCRIPTION: 
+ASTC Encoder (astcenc) is for the Adaptive Scalable Texture Compression (ASTC) format commonly used with OpenGL, OpenGL ES, and Vulkan graphics APIs. This test profile does a coding test of both compression/decompression.
+#### RESULTS FORMAT:
+Second
+
+### BLOGBENCH
+#### DESCRIPTION: 
+BlogBench is designed to replicate the load of a real-world busy file server by stressing the file-system with multiple threads of random reads, writes, and rewrites. The behavior is mimicked of that of a blog by creating blogs with content and pictures, modifying blog posts, adding comments to these blogs, and then reading the content of the blogs. All of these blogs generated are created locally with fake content and pictures.
+#### RESULTS FORMAT:
+Final Score
+
+### C-BLOSC
+#### DESCRIPTION: 
+A simple, compressed, fast and persistent data store library for C.
+#### RESULTS FORMAT:
+MB/s
+
+### BOTAN
+#### DESCRIPTION: 
+Botan is a cross-platform open-source C++ crypto library that supports most all publicly known cryptographic algorithms.
+#### RESULTS FORMAT:
+MiB/s
+
+### CP2K
+#### DESCRIPTION: 
+CP2K is an open-source molecular dynamics software package focused on quantum chemistry and solid-state physics. This test profile currently uses the SSMP (OpenMP) version of cp2k.
+#### RESULTS FORMAT:
+Second
+
+### CPP-PERF-BENCH
+#### DESCRIPTION: 
+CppPerformanceBenchmarks is a set of C++ compiler performance benchmarks.
+#### RESULTS FORMAT:
+Second
+
+### CRYPTOPP
+#### DESCRIPTION: 
+Crypto++ is a C++ class library of cryptographic algorithms.
+#### RESULTS FORMAT:
+MiB/Second
+
+### CUDA-MINI-NBODY
+#### DESCRIPTION: 
+The CUDA version of Harrism's mini-nbody tests.
+#### RESULTS FORMAT:
+(NBody^2)/Second

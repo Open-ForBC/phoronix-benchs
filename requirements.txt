@@ -1,0 +1,6 @@
+argparse
+GitPython
+glob2
+xml-python
+requests
+progressbar
