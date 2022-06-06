@@ -280,9 +280,18 @@ def create_setup_file(target_dir, benchmark_name):
     """
     A function which creates a setup file from a template.
     """
+    from os import chmod, stat
+    from stat import S_IEXEC
+
     target_setup_file = os.path.join(target_dir, "setup.sh")
     cp(setup_template, target_setup_file)
-    file_inplace_replace(file_path=target_setup_file, search_string="BENCHMARK_NAME", replace_string=benchmark_name)
+    file_stat = stat(target_setup_file)
+    chmod(target_setup_file, file_stat.st_mode | S_IEXEC)
+    file_inplace_replace(
+        file_path=target_setup_file,
+        search_string="BENCHMARK_NAME",
+        replace_string=benchmark_name,
+    )
 
 
 def create_info_file(target_dir, test_definition_xml, results_definition_xml, default_settings_file, benchmark_name):
