@@ -413,7 +413,9 @@ def download_packages(bench_path, target_dir):
                     sha256 = None
 
                     try:
-                        size = package.getElementsByTagName('FileSize')[0].firstChild.nodeValue
+                        size = int(package.getElementsByTagName("FileSize")[
+                            0
+                        ].firstChild.nodeValue)
                         print("Downloading {} (size:{})".format(filename, size))
                     except Exception:
                         size = None
@@ -445,37 +447,52 @@ def download_packages(bench_path, target_dir):
                         os.remove(target_file)
 
             if should_download:
+                downloaded = False
                 for url in urls:
                     print(url)
                     try:
                         download_file(url=url, target_filename=target_file)
-                        # opener = urllib.request.URLopener()
-                        # opener.addheader('User-Agent', 'Mozilla/5.0')
-                        # opener.addheader('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8')
-                        # print(opener.retrieve(url))
-                        # filename, _ = opener.retrieve(url, target_file, ProgressBar())
-                        verified = False
-                        if md5:
-                            if hashlib.md5(open(target_file, 'rb').read()).hexdigest() == md5:
-                                verified = True
-                        elif sha256:
-                            if hashlib.sha256(open(target_file, 'rb').read()).hexdigest() == sha256:
-                                verified = True
-                        elif size:
-                            if os.path.getsize(target_file) == size:
-                                verified = True
-                        else:
-                            verified = False
-
-                        if verified:
-                            break
-                        else:
-                            print("Wrong checksum. Trying from another source.")
-                            os.remove(target_file)
                     except Exception:
                         traceback.print_exc()
-                        if url == urls[-1]:
-                            raise Exception("None of the provided URLs works.")
+                        continue
+
+                    hash = md5 or sha256
+                    hash_fn = hashlib.md5 if md5 else hashlib.sha256 if sha256 else None
+                    if hash_fn:
+                        actual_hash = hash_fn(
+                            open(target_file, "rb").read()
+                        ).hexdigest()
+                        verified = actual_hash == hash
+                        if not verified:
+                            print(
+                                "Got wrong checksum downloading "
+                                f"{filename} from {url}:\n"
+                                f"\t{hash} expected, but got\n"
+                                f"\t{actual_hash} instead."
+                            )
+                    elif size:
+                        print(f"No hash specified, checking file size instead.")
+                        actual_size = os.path.getsize(target_file)
+                        verified = actual_size == size
+                        if not verified:
+                            print(
+                                f"Got wrong filesize downloading {filename} from {url}: "
+                                f"{actual_size} != {size} (expected)."
+                            )
+                    else:
+                        verified = False
+
+                    if not verified:
+                        print(f"File {target_file} will now be removed.")
+                        os.remove(target_file)
+                        continue
+
+                    downloaded = True
+                    break
+
+                if not downloaded:
+                    raise Exception(f"Could not download {filename} from any of specified URLs")
+
     return
 
 
