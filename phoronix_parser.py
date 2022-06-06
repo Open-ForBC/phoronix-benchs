@@ -402,7 +402,7 @@ def get_download_packages(downloads_xml_path):
     """
     downloads = []
 
-    if os.path.exists(downloads_xml_path):
+    try:
         downloads_xml = minidom.parse(downloads_xml_path)
         packages_list = downloads_xml.getElementsByTagName('Package')
 
@@ -438,8 +438,8 @@ def get_download_packages(downloads_xml_path):
             downloads.append(package_dict)
 
         return downloads
-    else:
-        return None
+    except Exception:
+        return []
 
 
 def download_packages(bench_path, target_dir):
@@ -448,7 +448,9 @@ def download_packages(bench_path, target_dir):
     It verifies the checksums afterwards.
     """
     downloads_xml_path = os.path.join(bench_path, "downloads.xml")
-    packages = get_download_packages(downloads_xml_path=downloads_xml_path)
+    packages = None
+    if os.path.exists(downloads_xml_path):
+        packages = get_download_packages(downloads_xml_path=downloads_xml_path)
     if packages:
         for package in packages:
             urls = package["urls"]
