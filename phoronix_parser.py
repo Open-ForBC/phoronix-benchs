@@ -525,7 +525,7 @@ def download_packages(bench_path, target_dir):
                                 f"\t{actual_hash} instead."
                             )
                     elif size:
-                        print(f"No hash specified, checking file size instead.")
+                        print("No hash specified, checking file size instead.")
                         actual_size = os.path.getsize(target_file)
                         verified = actual_size == size
                         if not verified:
