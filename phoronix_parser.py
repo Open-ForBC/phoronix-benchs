@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 import git
 import os
 import glob
 from xml.dom import minidom
 import requests
-import hashlib
 from shutil import copy2 as cp, COPY_BUFSIZE
 import stat
-from sys import platform
 import subprocess
 from select import select
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 import json
 import fileinput
 import traceback
 import progressbar
+
+if TYPE_CHECKING:
+    from typing import Optional
 
 REMOTE_BENCH_ROOT_PATH = os.path.join("ob-cache", "test-profiles", "pts")
 file_dir = os.path.dirname(os.path.abspath(__file__))
@@ -32,6 +36,23 @@ installer_map = {
     "windows": "install_windows.sh",
 }
 bench_dict = {}
+
+
+@dataclass
+class PhoronixDownloadDefinition:
+    filename: str
+    platform: Optional[Literal["darwin", "linux", "windows"]]
+    urls: list[str]
+    size: Optional[int] = None
+    md5: Optional[str] = None
+    sha256: Optional[str] = None
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.filename} (platform={self.platform}, "
+            f"{'md5' if self.md5 else 'sha256' if self.sha256 else 'size' if self.size else 'noverify'}"
+            f"={self.md5 or self.sha256 or self.size or '1'})"
+        )
 
 
 @contextmanager
@@ -137,6 +158,8 @@ def phoronix_list(benchmark_name=None, plat=None):
     """
     Function capable of listing all the versions of a given benchmark.
     """
+    from sys import platform
+
     if plat is None:
         plat = platform
     if benchmark_name is None or not benchmark_name:
@@ -425,7 +448,7 @@ def get_related_platform(xml_package):
     return related_platform
 
 
-def get_download_packages(downloads_xml_path):
+def get_download_packages(downloads_xml_path) -> list[PhoronixDownloadDefinition]:
     """
     A function which obtains the downloads info as described in the downloads.xml file.
     The output is either a dictionary or a json file.
@@ -451,41 +474,28 @@ def get_download_packages(downloads_xml_path):
         packages_list = downloads_xml.getElementsByTagName("Package")
 
         for package in packages_list:
-            package_dict = {}
-            package_dict["urls"] = package.getElementsByTagName("URL")[
-                0
-            ].firstChild.nodeValue.split(",")
+            urls = package.getElementsByTagName("URL")[0].firstChild.nodeValue.split(
+                ","
+            )
             filename = package.getElementsByTagName("FileName")[0].firstChild.nodeValue
-            package_dict["filename"] = filename
 
-            package_dict["platform"] = get_related_platform(xml_package=package)
+            platform = get_related_platform(xml_package=package)
 
-            try:
+            md5 = None
+            sha256 = None
+            size = None
+            with suppress(IndexError):
                 md5 = package.getElementsByTagName("MD5")[0].firstChild.nodeValue
-                package_dict["md5"] = md5
-            except Exception:
-                md5 = None
+            with suppress(IndexError):
+                sha256 = package.getElementsByTagName("SHA256")[0].firstChild.nodeValue
+            with suppress(IndexError):
+                size = int(
+                    package.getElementsByTagName("FileSize")[0].firstChild.nodeValue
+                )
 
-                try:
-                    sha256 = package.getElementsByTagName("SHA256")[
-                        0
-                    ].firstChild.nodeValue
-                    package_dict["sha256"] = sha256
-                except Exception:
-                    sha256 = None
-
-                    try:
-                        size = int(
-                            package.getElementsByTagName("FileSize")[
-                                0
-                            ].firstChild.nodeValue
-                        )
-                    except Exception:
-                        size = None
-
-                    package_dict["size"] = size
-
-            downloads.append(package_dict)
+            downloads.append(
+                PhoronixDownloadDefinition(filename, platform, urls, size, md5, sha256)
+            )
 
         return downloads
     except Exception:
@@ -497,117 +507,93 @@ def download_packages(bench_path, target_dir):
     A function which downloads the required software as described by get_download_packages().
     It verifies the checksums afterwards.
     """
+    from hashlib import md5, sha256
+    from os import remove
+    from os.path import exists, isfile, join, getsize
+    from sys import platform
+
     downloads_xml_path = os.path.join(bench_path, "downloads.xml")
     packages = None
-    if os.path.exists(downloads_xml_path):
+    if exists(downloads_xml_path):
         packages = get_download_packages(downloads_xml_path=downloads_xml_path)
-    if packages:
-        for package in packages:
-            urls = package["urls"]
-            filename = package["filename"]
 
+    if not packages:
+        return
+
+    for package in packages:
+        hash = package.md5 or package.sha256
+        hash_fn = md5 if package.md5 else sha256 if package.sha256 else None
+
+        if package.platform and package.platform != platform:
+            print(f"Skipping {package}, not required for platform {platform}.")
+            continue
+
+        print(f"Downloading {package}")
+
+        target_file = join(target_dir, package.filename)
+
+        if isfile(target_file):
+            with open(target_file, "rb") as f:
+                if (hash and hash_fn(f.read()).hexdigest() == hash) or getsize(
+                    target_file
+                ) == package.size:
+                    print(f"File {target_file} verified, skipping download.")
+                    continue
+
+                print(f"Deleting non-verified file: {target_file}")
+                remove(target_file)
+
+        downloaded = False
+        for url in package.urls:
+            print(url)
             try:
-                md5 = package["md5"]
-                print("Downloading {} (md5:{})".format(filename, md5))
+                download_file(url=url, target_filename=target_file)
             except Exception:
-                md5 = None
+                traceback.print_exc()
+                continue
 
-                try:
-                    sha256 = package["sha256"]
-                    print("Downloading {} (sha256:{})".format(filename, sha256))
-                except Exception:
-                    sha256 = None
-
-                    try:
-                        size = package["size"]
-                        print("Downloading {} (size:{})".format(filename, size))
-                    except Exception:
-                        size = None
-
-            target_file = os.path.join(target_dir, filename)
-            platform_specific = package["platform"]
-            if not platform_specific:
-                should_download = True
-            else:
-                should_download = platform_specific == platform
-                if not should_download:
+            if hash:
+                actual_hash = hash_fn(open(target_file, "rb").read()).hexdigest()
+                verified = actual_hash == hash
+                if not verified:
                     print(
-                        f"Skipping file {filename} since not required for this platform."
+                        f"Got wrong checksum downloading {package} from {url}, "
+                        f"download hash: {actual_hash}"
                     )
-
-            if os.path.isfile(target_file):
-                with open(target_file, "rb") as f:
-                    if md5:
-                        if hashlib.md5(f.read()).hexdigest() == md5:
-                            print("Already downloaded. Skipping.")
-                            should_download = False
-                    elif sha256:
-                        if hashlib.sha256(f.read()).hexdigest() == sha256:
-                            print("Already downloaded. Skipping.")
-                            should_download = False
-                    elif size:
-                        if os.path.getsize(target_file) == size:
-                            print("Already downloaded. Skipping.")
-                            should_download = False
-                    else:
-                        os.remove(target_file)
-
-            if should_download:
-                downloaded = False
-                for url in urls:
-                    print(url)
-                    try:
-                        download_file(url=url, target_filename=target_file)
-                    except Exception:
-                        traceback.print_exc()
-                        continue
-
-                    hash = md5 or sha256
-                    hash_fn = hashlib.md5 if md5 else hashlib.sha256 if sha256 else None
-                    if hash_fn:
-                        actual_hash = hash_fn(
-                            open(target_file, "rb").read()
-                        ).hexdigest()
-                        verified = actual_hash == hash
-                        if not verified:
-                            print(
-                                "Got wrong checksum downloading "
-                                f"{filename} from {url}:\n"
-                                f"\t{hash} expected, but got\n"
-                                f"\t{actual_hash} instead."
-                            )
-                    elif size:
-                        print("No hash specified, checking file size instead.")
-                        actual_size = os.path.getsize(target_file)
-                        verified = actual_size == size
-                        if not verified:
-                            print(
-                                f"Got wrong filesize downloading {filename} from {url}: "
-                                f"{actual_size} != {size} (expected)."
-                            )
-                    else:
-                        verified = False
-
-                    if not verified:
-                        print(f"File {target_file} will now be removed.")
-                        os.remove(target_file)
-                        continue
-
-                    downloaded = True
-                    break
-
-                if not downloaded:
-                    raise Exception(
-                        f"Could not download {filename} from any of specified URLs"
+            elif package.size:
+                print("No hash specified, checking file size instead.")
+                actual_size = os.path.getsize(target_file)
+                verified = actual_size == package.size
+                if not verified:
+                    print(
+                        f"Got wrong filesize downloading {package} from {url}, "
+                        f"download_size={actual_size}"
                     )
+            else:
+                print(
+                    "WARN: No verification method available for package!\n"
+                    f"Verification skipped for {target_file}"
+                )
+                verified = True
 
-    return
+            if not verified:
+                print(f"File {target_file} will now be removed.")
+                os.remove(target_file)
+                continue
+
+            downloaded = True
+            break
+
+        if not downloaded:
+            raise Exception(f"Could not download {package} from any of specified URLs")
 
 
 def install_executable(target_dir):
     """
     A function to execute the phoronix setup script.
     """
+    from sys import platform
+
     if os.path.isfile(os.path.join(target_dir, installer_map[platform])):
         cmd = ["bash", installer_map[platform]]
         my_env = os.environ.copy()
