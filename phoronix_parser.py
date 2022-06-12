@@ -1,25 +1,17 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
 import git
 import os
 import glob
 from xml.dom import minidom
-import requests
-from shutil import copy2 as cp, COPY_BUFSIZE
-import stat
-import subprocess
-from select import select
+from shutil import copy2 as cp
 from contextlib import contextmanager, suppress
 import json
 import fileinput
-import traceback
-import progressbar
 
-if TYPE_CHECKING:
-    from typing import Optional
+
+from phoronix_downloader import PACKAGES_JSON_FILENAME, PhoronixDownloadDefinition
 
 REMOTE_BENCH_ROOT_PATH = os.path.join("ob-cache", "test-profiles", "pts")
 file_dir = os.path.dirname(os.path.abspath(__file__))
@@ -38,62 +30,12 @@ installer_map = {
 bench_dict = {}
 
 
-@dataclass
-class PhoronixDownloadDefinition:
-    filename: str
-    platform: Optional[Literal["darwin", "linux", "windows"]]
-    urls: list[str]
-    size: Optional[int] = None
-    md5: Optional[str] = None
-    sha256: Optional[str] = None
-
-    def __repr__(self) -> str:
-        return (
-            f"{self.filename} (platform={self.platform}, "
-            f"{'md5' if self.md5 else 'sha256' if self.sha256 else 'size' if self.size else 'noverify'}"
-            f"={self.md5 or self.sha256 or self.size or '1'})"
-        )
-
-
 @contextmanager
 def pipe():
     r, w = os.pipe()
     yield r, w
     os.close(r)
     os.close(w)
-
-
-class ProgressBar:
-    def __init__(self, total_size):
-        self.pbar = None
-        self.total_size = total_size if total_size > 0 else progressbar.UnknownLength
-        self.widgets = [
-            progressbar.Percentage() if total_size else " ",
-            progressbar.Bar(),
-            " ",
-            progressbar.FileTransferSpeed(),
-            " ",
-            " (",
-            progressbar.ETA(),
-            ") ",
-        ]
-
-    def call(self, block_num, block_size):
-        if not self.pbar:
-            self.pbar = progressbar.ProgressBar(
-                maxval=self.total_size, widgets=self.widgets
-            )
-            self.pbar.start()
-
-        downloaded = block_num * block_size
-
-        if self.total_size == progressbar.UnknownLength:
-            self.pbar.update(downloaded)
-        else:
-            if downloaded < self.total_size:
-                self.pbar.update(downloaded)
-            else:
-                self.pbar.finish()
 
 
 def generate_dict():
@@ -211,35 +153,6 @@ def safe_mkdir(path):
         os.mkdir(path)
 
 
-def mycopyfileobj(fsrc, fdst, length=0, total_size=0, prog_bar: ProgressBar = None):
-    """copy data from file-like object fsrc to file-like object fdst"""
-    # Localize variable access to minimize overhead.
-    if not prog_bar:
-        prog_bar = ProgressBar(total_size)
-    if not length:
-        length = COPY_BUFSIZE
-    fsrc_read = fsrc.read
-    fdst_write = fdst.write
-    block_num = 0
-    while True:
-        block_num += 1
-        buf = fsrc_read(length)
-        if not buf:
-            break
-        fdst_write(buf)
-        prog_bar.call(block_num=block_num, block_size=length)
-
-
-def download_file(url, target_filename):
-    with requests.get(url, stream=True) as r:
-        try:
-            total_size = int(r.headers.get("Content-Length"))
-        except Exception:
-            total_size = 0
-        with open(target_filename, "wb") as f:
-            mycopyfileobj(r.raw, f, total_size=total_size)
-
-
 def file_inplace_replace(file_path, search_string, replace_string):
     """
     A function working very much as replace, but inplace on files.
@@ -312,10 +225,12 @@ def install_installers(bench_path, target_dir):
     A function which copies and chmod+x the installer scripts coming with phoronix benchmarks.
     Typical names are install.sh, install_macosx.sh, install_windows.sh .
     """
+    from os.path import basename
+
     for installer in glob.glob(os.path.join(bench_path, "install*.sh")):
         cp(installer, target_dir)
-        installer_path = os.path.join(target_dir, installer)
-        os.chmod(installer_path, os.stat(installer_path).st_mode | stat.S_IEXEC)
+        installer_path = os.path.join(target_dir, basename(installer))
+        ensure_executable(installer_path)
 
 
 def create_setup_file(target_dir, benchmark_name):
@@ -350,6 +265,8 @@ def create_info_file(
     Furthermore, this function takes informations from results-definition.xml about benchamrk results
     parsing in order to put them inside the benchmark.json file.
     """
+    from sys import platform
+
     info_section = test_definition_xml.getElementsByTagName("TestInformation")[0]
     info_benchmark_name = info_section.getElementsByTagName("Title")[
         0
@@ -381,6 +298,11 @@ def create_info_file(
         file_path=target_benchmark_info_file,
         search_string="PUT_RUN_COMMAND_HERE",
         replace_string=benchmark_run_command,
+    )
+    file_inplace_replace(
+        target_benchmark_info_file,
+        "@INSTALLER_FILENAME@",
+        f"./{installer_map[platform]}",
     )
 
     # RESULTS PARSING
@@ -448,7 +370,7 @@ def get_related_platform(xml_package):
     return related_platform
 
 
-def get_download_packages(downloads_xml_path) -> list[PhoronixDownloadDefinition]:
+def get_download_packages(bench_path) -> list[PhoronixDownloadDefinition]:
     """
     A function which obtains the downloads info as described in the downloads.xml file.
     The output is either a dictionary or a json file.
@@ -467,8 +389,11 @@ def get_download_packages(downloads_xml_path) -> list[PhoronixDownloadDefinition
         </Downloads>
     </PhoronixTestSuite>
     """
-    downloads = []
+    from os.path import join
 
+    downloads_xml_path = join(bench_path, "downloads.xml")
+
+    downloads = []
     try:
         downloads_xml = minidom.parse(downloads_xml_path)
         packages_list = downloads_xml.getElementsByTagName("Package")
@@ -502,119 +427,25 @@ def get_download_packages(downloads_xml_path) -> list[PhoronixDownloadDefinition
         return []
 
 
-def download_packages(bench_path, target_dir):
-    """
-    A function which downloads the required software as described by get_download_packages().
-    It verifies the checksums afterwards.
-    """
-    from hashlib import md5, sha256
-    from os import remove
-    from os.path import exists, isfile, join, getsize
-    from sys import platform
+def create_packages_file(bench_path: str, target_dir: str) -> None:
+    from os.path import join
 
-    downloads_xml_path = os.path.join(bench_path, "downloads.xml")
-    packages = None
-    if exists(downloads_xml_path):
-        packages = get_download_packages(downloads_xml_path=downloads_xml_path)
-
-    if not packages:
-        return
-
-    for package in packages:
-        hash = package.md5 or package.sha256
-        hash_fn = md5 if package.md5 else sha256 if package.sha256 else None
-
-        if package.platform and package.platform != platform:
-            print(f"Skipping {package}, not required for platform {platform}.")
-            continue
-
-        print(f"Downloading {package}")
-
-        target_file = join(target_dir, package.filename)
-
-        if isfile(target_file):
-            with open(target_file, "rb") as f:
-                if (hash and hash_fn(f.read()).hexdigest() == hash) or getsize(
-                    target_file
-                ) == package.size:
-                    print(f"File {target_file} verified, skipping download.")
-                    continue
-
-                print(f"Deleting non-verified file: {target_file}")
-                remove(target_file)
-
-        downloaded = False
-        for url in package.urls:
-            print(url)
-            try:
-                download_file(url=url, target_filename=target_file)
-            except Exception:
-                traceback.print_exc()
-                continue
-
-            if hash:
-                actual_hash = hash_fn(open(target_file, "rb").read()).hexdigest()
-                verified = actual_hash == hash
-                if not verified:
-                    print(
-                        f"Got wrong checksum downloading {package} from {url}, "
-                        f"download hash: {actual_hash}"
-                    )
-            elif package.size:
-                print("No hash specified, checking file size instead.")
-                actual_size = os.path.getsize(target_file)
-                verified = actual_size == package.size
-                if not verified:
-                    print(
-                        f"Got wrong filesize downloading {package} from {url}, "
-                        f"download_size={actual_size}"
-                    )
-            else:
-                print(
-                    "WARN: No verification method available for package!\n"
-                    f"Verification skipped for {target_file}"
-                )
-                verified = True
-
-            if not verified:
-                print(f"File {target_file} will now be removed.")
-                os.remove(target_file)
-                continue
-
-            downloaded = True
-            break
-
-        if not downloaded:
-            raise Exception(f"Could not download {package} from any of specified URLs")
+    PhoronixDownloadDefinition.into_json(
+        get_download_packages(bench_path), join(target_dir, PACKAGES_JSON_FILENAME)
+    )
 
 
-def install_executable(target_dir):
-    """
-    A function to execute the phoronix setup script.
-    """
-    from sys import platform
+def ensure_executable(path: str) -> None:
+    from os import chmod, stat
+    from stat import S_IEXEC
 
-    if os.path.isfile(os.path.join(target_dir, installer_map[platform])):
-        cmd = ["bash", installer_map[platform]]
-        my_env = os.environ.copy()
-        my_env["HOME"] = target_dir
-
-        # from https://gist.github.com/phizaz/e81d3d362e89bc68055cfcd670d44e9b
-        with pipe() as (r, w):
-            with subprocess.Popen(
-                cmd, stdout=w, stderr=w, cwd=target_dir, env=my_env
-            ) as p:
-                while p.poll() is None:
-                    while len(select([r], [], [], 0)[0]) > 0:
-                        buf = os.read(r, 1024)
-                        print(buf.decode("utf-8"), end="")
-    else:
-        raise Exception(
-            f"The current platform ({platform}) is not supported by this benchmark."
-        )
+    chmod(path, stat(path).st_mode | S_IEXEC)
 
 
 def phoronix_install(benchmark_name, benchmark_v=None):
+    from os.path import dirname, join
+    from shutil import copy
+
     if phoronix_exists(benchmark_name, benchmark_v):
         if not benchmark_v:
             benchmark_v = list(bench_dict[benchmark_name]["versions"].keys())[-1]
@@ -660,8 +491,12 @@ def phoronix_install(benchmark_name, benchmark_v=None):
             benchmark_name=benchmark_name,
         )
 
-        download_packages(bench_path=bench_path, target_dir=target_dir)
-        install_executable(target_dir=target_dir)
+        copy(
+            join(dirname(__file__), "phoronix_downloader.py"),
+            join(target_dir, "phoronix_downloader.py"),
+        )
+
+        create_packages_file(bench_path, target_dir)
     else:
         raise Exception(
             f"The required benchmark {benchmark_name} @ {benchmark_v} doesn't exist."
