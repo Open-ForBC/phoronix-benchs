@@ -381,10 +381,11 @@ def get_related_platform(xml_package):
     return related_platform
 
 
-def download_packages(bench_path, target_dir):
+def get_download_packages(downloads_xml_path):
     """
-    A function which downloads the required software as described in the downloads.xml file.
-    It verifies the checksums afterwards. The downloads are listed in the form:
+    A function which obtains the downloads info as described in the downloads.xml file.
+    The output is either a dictionary or a json file.
+    The downloads in the downloads.xml file are listed in the form:
 
     <PhoronixTestSuite>
         <Downloads>
@@ -398,26 +399,30 @@ def download_packages(bench_path, target_dir):
             </Package>
         </Downloads>
     </PhoronixTestSuite>
-
     """
-    downloads_xml_path = os.path.join(bench_path, "downloads.xml")
-    if os.path.exists(downloads_xml_path):
+    downloads = []
+
+    try:
         downloads_xml = minidom.parse(downloads_xml_path)
         packages_list = downloads_xml.getElementsByTagName('Package')
 
         for package in packages_list:
-            urls = package.getElementsByTagName('URL')[0].firstChild.nodeValue.split(',')
+            package_dict = {}
+            package_dict["urls"] = package.getElementsByTagName('URL')[0].firstChild.nodeValue.split(',')
             filename = package.getElementsByTagName('FileName')[0].firstChild.nodeValue
+            package_dict["filename"] = filename
+
+            package_dict["platform"] = get_related_platform(xml_package=package)
 
             try:
                 md5 = package.getElementsByTagName('MD5')[0].firstChild.nodeValue
-                print("Downloading {} (md5:{})".format(filename, md5))
+                package_dict["md5"] = md5
             except Exception:
                 md5 = None
 
                 try:
                     sha256 = package.getElementsByTagName('SHA256')[0].firstChild.nodeValue
-                    print("Downloading {} (sha256:{})".format(filename, sha256))
+                    package_dict["sha256"] = sha256
                 except Exception:
                     sha256 = None
 
@@ -425,12 +430,52 @@ def download_packages(bench_path, target_dir):
                         size = int(package.getElementsByTagName("FileSize")[
                             0
                         ].firstChild.nodeValue)
+                    except Exception:
+                        size = None
+
+                    package_dict["size"] = size
+
+            downloads.append(package_dict)
+
+        return downloads
+    except Exception:
+        return []
+
+
+def download_packages(bench_path, target_dir):
+    """
+    A function which downloads the required software as described by get_download_packages().
+    It verifies the checksums afterwards.
+    """
+    downloads_xml_path = os.path.join(bench_path, "downloads.xml")
+    packages = None
+    if os.path.exists(downloads_xml_path):
+        packages = get_download_packages(downloads_xml_path=downloads_xml_path)
+    if packages:
+        for package in packages:
+            urls = package["urls"]
+            filename = package["filename"]
+
+            try:
+                md5 = package["md5"]
+                print("Downloading {} (md5:{})".format(filename, md5))
+            except Exception:
+                md5 = None
+
+                try:
+                    sha256 = package["sha256"]
+                    print("Downloading {} (sha256:{})".format(filename, sha256))
+                except Exception:
+                    sha256 = None
+
+                    try:
+                        size = package["size"]
                         print("Downloading {} (size:{})".format(filename, size))
                     except Exception:
                         size = None
 
             target_file = os.path.join(target_dir, filename)
-            platform_specific = get_related_platform(xml_package=package)
+            platform_specific = package["platform"]
             if not platform_specific:
                 should_download = True
             else:
@@ -480,7 +525,7 @@ def download_packages(bench_path, target_dir):
                                 f"\t{actual_hash} instead."
                             )
                     elif size:
-                        print(f"No hash specified, checking file size instead.")
+                        print("No hash specified, checking file size instead.")
                         actual_size = os.path.getsize(target_file)
                         verified = actual_size == size
                         if not verified:
