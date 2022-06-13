@@ -1,3 +1,5 @@
+.vscode
+venv
 phoronix-benchs
 phoronix-converted
 .DS_Store
