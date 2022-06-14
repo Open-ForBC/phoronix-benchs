@@ -13,7 +13,8 @@ import fileinput
 
 from phoronix_downloader import PACKAGES_JSON_FILENAME, PhoronixDownloadDefinition
 
-REMOTE_BENCH_ROOT_PATH = os.path.join("ob-cache", "test-profiles", "pts")
+REMOTE_BENCH_ROOT_PATH = os.path.join("pts")
+REMOTE_BENCH_LICENSE_PATH = "LICENSE"
 file_dir = os.path.dirname(os.path.abspath(__file__))
 clone_dir = os.path.join(file_dir, "phoronix-benchs")
 bench_root_path = os.path.join(clone_dir, REMOTE_BENCH_ROOT_PATH)
@@ -68,7 +69,7 @@ def phoronix_init():
 
     try:
         repo.create_remote(
-            "origin", "https://github.com/phoronix-test-suite/phoronix-test-suite"
+            "origin", "https://github.com/phoronix-test-suite/test-profiles"
         )
     except git.exc.GitCommandError:
         print("Origin already set up.")
@@ -79,11 +80,13 @@ def phoronix_init():
         clone_dir, ".git", "info", "sparse-checkout"
     )
 
+    print(sparse_checkout_info_file_path)
     if os.path.isfile(sparse_checkout_info_file_path):
         sparse_checkout_info_file = open(sparse_checkout_info_file_path, "w")
     else:
         sparse_checkout_info_file = open(sparse_checkout_info_file_path, "x")
-    sparse_checkout_info_file.write(REMOTE_BENCH_ROOT_PATH)
+    sparse_checkout_info_file.write(f"{REMOTE_BENCH_ROOT_PATH}\n")
+    sparse_checkout_info_file.write(f"{REMOTE_BENCH_LICENSE_PATH}\n")
     sparse_checkout_info_file.close()
 
     rebase = False
