@@ -228,12 +228,26 @@ def install_installers(bench_path, target_dir):
     A function which copies and chmod+x the installer scripts coming with phoronix benchmarks.
     Typical names are install.sh, install_macosx.sh, install_windows.sh .
     """
-    from os.path import basename
+    from os.path import basename, join
 
+    phoronix_filenames = []
     for installer in glob.glob(os.path.join(bench_path, "install*.sh")):
+        phoronix_filenames.append(basename(installer))
         cp(installer, target_dir)
         installer_path = os.path.join(target_dir, basename(installer))
         ensure_executable(installer_path)
+
+    cp(join(clone_dir, REMOTE_BENCH_LICENSE_PATH), target_dir)
+    if not phoronix_filenames:
+        return
+
+    with open(join(target_dir, REMOTE_BENCH_LICENSE_PATH), "r+") as file:
+        content = file.read()
+        file.seek(0)
+        file.write("ONLY THE FOLLOWING FILES ARE DISTRIBUTED UNDER THIS LICENSE:\n")
+        for filename in phoronix_filenames:
+            file.write(f"* {filename}\n")
+        file.write("\n" + content)
 
 
 def create_setup_file(target_dir, benchmark_name):
